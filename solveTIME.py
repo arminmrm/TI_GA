@@ -7,6 +7,7 @@ import time
 import argparse 
 import cupy as cp
 from utils import objective_df_cp
+
 # Create the parser
 parser = argparse.ArgumentParser(description='Your script description here.')
 
@@ -19,7 +20,7 @@ parser.add_argument('--verbose', action='store_true', help='Enable verbose outpu
 # Parse the arguments
 args = parser.parse_args()
 
-if __name__ == "__main__":
+def main(SID, roi_n, headmodel_path, train=False, debug=False):
 
     # Set algorithm parameters
     ALG_PARAMS = {'max_num_iteration': 25,
@@ -34,12 +35,11 @@ if __name__ == "__main__":
                         'cur_min': 0.05, 
                         'cur_max': 2,
                         'cur_step': 0.05,
-                        'SID': args.SID,
-                        'roi_n': args.roi_n
+                        'SID': SID,
+                        'roi_n': roi_n
                     }
-    # Define datapath
-    data_path = f'/work/pi_sumientra_rampersad_umb_edu/Projects/TIS/Data'
-    headmodel_path = os.path.join(data_path, f'HeadModels/{ALG_PARAMS["SID"]}')
+   
+    
     # Keywords related to GA 
     GA_keywords = ['max_num_iteration',
                         'population_size',
@@ -50,10 +50,8 @@ if __name__ == "__main__":
                         'crossover_type',
                         'max_iteration_without_improv']
                         
-
-
     # Load model
-    model = scipy.io.loadmat(os.path.join(headmodel_path, f'{ALG_PARAMS["SID"]}_stats.mat'))
+    model = scipy.io.loadmat(os.path.join(headmodel_path, f'{SID}_stats.mat'))
     # Load region indices CI
     aal_regions = np.squeeze(model['i_brain'])
     # Get number of elements
@@ -61,13 +59,13 @@ if __name__ == "__main__":
     # Set brain mask 
     brain_mask = aal_regions > 0
      # Load labels
-    ROIs_file = scipy.io.loadmat(os.path.join(headmodel_path, f'ROI/{ALG_PARAMS["SID"]}_ROIs.mat'))
+    ROIs_file = scipy.io.loadmat(os.path.join(headmodel_path, f'ROI/{SID}_ROIs.mat'))
     # labels indices
     ROIs_masks = ROIs_file['ROIs']['index'][0,0].toarray()
     # Load types
-    roi_type = ROIs_file['ROIs']['type'][0,0][args.roi_n-1]
+    roi_type = ROIs_file['ROIs']['type'][0,0][roi_n-1]
     # ROI mask
-    roi_mask = ROIs_masks[:,args.roi_n-1] == 1
+    roi_mask = ROIs_masks[:,roi_n-1] == 1
     # Set field type accoridng to ROI region type 
     if roi_type == 'ctx':
         print('Cortical ROI, running the comb direction')
@@ -77,18 +75,22 @@ if __name__ == "__main__":
         ALG_PARAMS["field_mode"] = 'free'
  
     # Load Volumes
-    volumes = np.squeeze(scipy.io.loadmat(os.path.join(headmodel_path, f'{ALG_PARAMS["SID"]}_stats.mat'))['elem']['volume'][:][0,0])
+    volumes = np.squeeze(scipy.io.loadmat(os.path.join(headmodel_path, f'{SID}_stats.mat'))['elem']['volume'][:][0,0])
 
     # load lead field matrix
-    with h5py.File(os.path.join(headmodel_path,  f'leadfield/{ALG_PARAMS["SID"]}_LFM_E.mat'), 'r') as file:
+    with h5py.File(os.path.join(headmodel_path,  f'leadfield/{SID}_LFM_E.mat'), 'r') as file:
         volLFM = file['LFM_E'][:][:,:n_elems,:]
     print('Loaded LFM!')
     # Get number of electrodes and elements 
     _, _, n_elecs = volLFM.shape
     # If usuing preferred direction load the vectors and compute inner-products 
     if ALG_PARAMS['field_mode'] in ['pref', 'comb']:
-         # Load EV
-        volPrefVec = scipy.io.loadmat(os.path.join(headmodel_path,  f'prefdir/{args.SID}_GM_ev.mat'))['prefdir']
+        # Load EV
+        with h5py.File(os.path.join(headmodel_path,  f'prefdir/{SID}_cortex_ev.mat'), 'r') as file:
+            volPrefVec = file['prefdir'][:]
+            if volPrefVec.shape[0] == 3:
+                volPrefVec = volPrefVec.T
+            volPrefVec = volPrefVec[:n_elems]
         
     if ALG_PARAMS['field_mode'] == 'pref':
         # Update brain mask to only GM 
@@ -117,10 +119,10 @@ if __name__ == "__main__":
     # Set region volumes
     region_volumes = np.array([volumes[aal_regions == lbl].sum() for lbl in np.unique(aal_regions[brain_mask])]) 
     # File prefix
-    prefix = f'{ALG_PARAMS["SID"]}_{n_elecs}elecs_roi_n{ALG_PARAMS["roi_n"]}_TI_{ALG_PARAMS["field_mode"]}_GA'
+    prefix = f'{SID}_{n_elecs}elecs_roi_n{roi_n}_TI_{ALG_PARAMS["field_mode"]}_GA'
 
-    print(f'Running for ROI {args.roi_n}, {ALG_PARAMS["SID"]}, and {ALG_PARAMS["field_mode"]}')
-    if True or args.train:
+    print(f'Running for ROI {roi_n}, {SID}, and {ALG_PARAMS["field_mode"]}')
+    if train:
         # Start time
         t_st = time.time()
         # Run GA
@@ -133,13 +135,14 @@ if __name__ == "__main__":
                 cur_max=ALG_PARAMS['cur_max'], 
                 cur_step=ALG_PARAMS['cur_step'], 
                 opt_threshold=ALG_PARAMS['opt_thresh'], 
-                pref_dir=volPrefVec if ALG_PARAMS['field_mode'] in ['pref', 'comb'] else None,
+                pref_dir=volPrefVec[brain_mask] if ALG_PARAMS['field_mode'] in ['pref', 'comb'] else None,
                 cortex_region=3,
                 mode=ALG_PARAMS['field_mode'],
                 parallel=True,
                 gpu=False)
         # End time
         t_end = time.time()
+        print(f'Found the optimal in {(t_end - t_st) // 60}(min)')
         # Save solution 
         scipy.io.savemat(os.path.join(data_path, f"Solutions/{prefix}.mat"), 
                 sol)
@@ -150,48 +153,71 @@ if __name__ == "__main__":
         
 
 
-    if args.debug:
-    
-        x0 = np.random.randint(0, n_elecs - 1, (4,))
-        currents1 = np.expand_dims(np.arange(ALG_PARAMS['cur_min'], ALG_PARAMS['cur_max'], ALG_PARAMS['cur_step']), axis=-1)
-        usable_currents = np.concatenate([currents1, ALG_PARAMS['cur_max'] - currents1], 
+    if debug:
+        
+        
+       # Usable currents 
+        currents1 = np.expand_dims(np.arange(ALG_PARAMS["cur_min"], ALG_PARAMS["cur_max"], ALG_PARAMS["cur_step"]), axis=-1)
+        currents2 = 2 * np.ones_like(currents1)
+        usable_currents = np.concatenate([currents1, currents2], 
                                     axis=-1)
         usable_currents = usable_currents[usable_currents[:,0] <= usable_currents[:,1],:]
-        print('Number of currents combinations: ', len(usable_currents))
-        t0 = time.time()
-        y0_cp = objective_df_cp(x0, 
-                                brain_field_data, 
-                                np.array([roi_label]), 
-                                cp.array(aal_regions[brain_mask]), 
-                                region_volumes, 
-                                usable_currents, 
-                                ALG_PARAMS['opt_thresh'], 
-                                mode=ALG_PARAMS['field_mode'])
-        t1 = time.time()
-        print(f'cp took {t1-t0}')
-        t0 = time.time()
-        y0_np = GA.objective_df_np(x0, 
-                                brain_field_data, 
-                                np.array([roi_label]), 
-                                aal_regions[brain_mask], 
-                                region_volumes, 
-                                usable_currents, 
-                                ALG_PARAMS['opt_thresh'],
-                                mode=ALG_PARAMS['field_mode'])
-        t1 = time.time()
-        print(f'np took {t1-t0}')
-        y0 = GA.objective_df(x0, 
-                                brain_field_data, 
-                                np.array([roi_label]), 
-                                aal_regions[brain_mask], 
-                                region_volumes, 
-                                usable_currents, 
-                                ALG_PARAMS['opt_thresh'], 
-                                mode=ALG_PARAMS['field_mode'], 
-                                parallel=True)
-        t2 = time.time()
-        print(f'parfor took {t2-t1}')
+        usable_currents = usable_currents[usable_currents[:,0] <= usable_currents[:,1],:]
+        print(usable_currents)
+        for _ in range(10):
+            x0 = np.random.randint(0, n_elecs - 1, (4,))
+            print('Number of currents combinations: ', len(usable_currents))
+            # t0 = time.time()
+            # y0_cp = objective_df_cp(x0, 
+            #                         brain_field_data, 
+            #                         np.array([roi_label]), 
+            #                         cp.array(aal_regions[brain_mask]), 
+            #                         region_volumes, 
+            #                         usable_currents, 
+            #                         ALG_PARAMS['opt_thresh'], 
+            #                         mode=ALG_PARAMS['field_mode'])
+            # t1 = time.time()
+            # print(f'cp took {t1-t0}')
+            # t0 = time.time()
+            # y0_np = GA.objective_df_np(x0, 
+            #                         brain_field_data, 
+            #                         np.array([roi_label]), 
+            #                         aal_regions[brain_mask], 
+            #                         region_volumes, 
+            #                         usable_currents, 
+            #                         ALG_PARAMS['opt_thresh'],
+            #                         mode=ALG_PARAMS['field_mode'])
+            # print(f'np took {t1-t0}')
+            t1 = time.time()
+            
+            y0 = GA.objective_df(x0, 
+                                    brain_field_data, 
+                                    np.array([roi_label]), 
+                                    aal_regions[brain_mask], 
+                                    region_volumes, 
+                                    usable_currents, 
+                                    ALG_PARAMS['opt_thresh'], 
+                                    pref_dir = volPrefVec[brain_mask] if ALG_PARAMS['field_mode'] in ['pref', 'comb'] else None,
+                                    mode=ALG_PARAMS['field_mode'], 
+                                    parallel=True)
+            t2 = time.time()
+            print(x0, y0)
+            print(f'Function evaluation took {round(t2-t1,2)}(s)')
 
   
 
     print('Done!')
+
+
+if __name__ == "__main__":
+    # Define datapath
+    data_path = f'/work/pi_sumientra_rampersad_umb_edu/Projects/TIS/Data'
+    # Path for head-models
+    headmodel_path = os.path.join(data_path, f'HeadModels/{args.SID}')
+    # Run main func 
+    main(args.SID, 2, headmodel_path, train=False, debug=True)
+
+    print('Main module done!')
+
+     
+

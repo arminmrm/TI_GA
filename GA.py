@@ -61,7 +61,7 @@ def objective_df(x, field_data, regions_of_interest, aal_regions, region_volumes
             modulation_values = 2 * np.minimum(np.abs(e_field_base), np.abs(e_field_df))
         elif mode == 'comb':
             cortex_mask = aal_regions == cortex_region
-            modulation_values = np.nan(len(e_field_base))
+            modulation_values = np.zeros(len(e_field_base))
             # Compute fields along the pref. direction 
             e_field_base_pref = np.multiply(e_field_base[cortex_mask], pref_dir[cortex_mask]).sum(axis=-1)
             e_field_df_pref = np.multiply(e_field_df[cortex_mask], pref_dir[cortex_mask]).sum(axis=-1)
@@ -279,7 +279,7 @@ def runGA(field_data, roi_labels, aal_regions, region_volumes, algorithm_param, 
                 variable_type_mixed=var_type, 
                 variable_boundaries=bounds, 
                 algorithm_parameters=algorithm_param, 
-                function_timeout=120., 
+                function_timeout=3600., 
                 convergence_curve=False)
     result.run()
     print('GA finished')
@@ -301,6 +301,8 @@ def runGA(field_data, roi_labels, aal_regions, region_volumes, algorithm_param, 
                     region_volumes, 
                     usable_currents[i:i+1], 
                     opt_threshold,
+                    pref_dir=pref_dir,
+                    cortex_region=cortex_region,
                     mode=mode,
                     parallel=parallel)
        
